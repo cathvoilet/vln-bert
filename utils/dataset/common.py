@@ -12,6 +12,16 @@ def load_json_data(path):
     return data
 
 
+def load_speaker_json_data(path):
+    data = []
+    with open(path, "r") as fid:
+        tmp_data = json.load(fid)
+        for instr_id, item in tmp_data.items():
+            data.append(item)
+
+    return data
+
+
 def save_json_data(data, path):
     with open(path, "w") as fid:
         json.dump(data, fid)
@@ -77,12 +87,16 @@ def get_headings(g, path, first_heading):
     return headings
 
 
-def tokenize(data, tokenizer, max_instruction_length):
+def tokenize(data, tokenizer, max_instruction_length, key="instructions"):
     for item in data:
         item["instruction_tokens"] = []
         item["instruction_token_masks"] = []
         item["instruction_segment_ids"] = []
-        for instruction in item["instructions"]:
+        if key == "instructions":
+            instructions = item[key]
+        else:
+            instructions = [item[key]]
+        for instruction in instructions:
             tokens = tokenizer.tokenize(instruction)
 
             # add a classification and seperator tokens
