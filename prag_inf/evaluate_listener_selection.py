@@ -4,6 +4,7 @@ from collections import defaultdict
 import numpy as np
 import random
 from scipy.stats import sem
+from scipy.special import softmax
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix, average_precision_score
 
 
@@ -97,12 +98,13 @@ def compute_listener_score1(input_voted_json_file, input_complete_json_file, sco
     return mean_avg_precision, output_str
 
 
-def compute_listener_score(input_voted_json_file, input_complete_json_file, score_metric="ndtw", speaker_weight=0.0, speaker_model=None):
+def compute_listener_score(input_voted_json_file, input_complete_json_file, score_metric="ndtw", speaker_weight=0.0,
+                           speaker_model=None, normalize_listener=0, normalize_speaker=0,
+                           listener_result_key="overall_voting_result", speaker_result_key="speaker_result"):
     print("\n\nRank instructions by: ", score_metric)
     print("Listener weight: ", round(1.0-speaker_weight, 1))
     print("Speaker weight: ", round(speaker_weight, 1))
     print("Speaker score model: ", speaker_model)
-    listener_result_key = "result"  # 'overall_voting_result'
 
     path2voted_instrs = defaultdict(list)
     with open(input_voted_json_file) as f:
@@ -114,9 +116,21 @@ def compute_listener_score(input_voted_json_file, input_complete_json_file, scor
                 return False, False
             path2voted_instrs[path_id].append((instr_id, item[listener_result_key][score_metric]))
 
+    if normalize_listener:
+        for path_id, instr_listener_scores in path2voted_instrs.items():
+            listener_scores = np.array([x[1] for x in instr_listener_scores])
+            # normalized_scores = (listener_scores - np.min(listener_scores)) / (np.max(listener_scores) - np.min(listener_scores))
+            normalized_scores = softmax(listener_scores)
+            path2voted_instrs[path_id] = []
+            for i in range(len(instr_listener_scores)):
+                instr_id, _ = instr_listener_scores[i]
+                normalized_score = normalized_scores[i]
+                path2voted_instrs[path_id].append((instr_id, normalized_score))
+
     path2positive_instrs = defaultdict(list)
     path2negative_instrs = defaultdict(list)
     instr2speaker_score = {}
+    path2speaker_scores = defaultdict(list)
     with open(input_complete_json_file) as f:
         tmp_data = json.load(f)
         for instr_id, item in tmp_data.items():
@@ -130,7 +144,18 @@ def compute_listener_score(input_voted_json_file, input_complete_json_file, scor
                 print("Unknown instr label: ", item['instr_label'])
 
             if speaker_weight:
-                instr2speaker_score[instr_id] = item["speaker_result"][speaker_model]
+                instr2speaker_score[instr_id] = item[speaker_result_key][speaker_model]
+                path2speaker_scores[path_id].append((instr_id, item[speaker_result_key][speaker_model]))
+
+    if normalize_speaker:
+        for path_id, instr_speaker_scores in path2speaker_scores.items():
+            speaker_scores = np.array([x[1] for x in instr_speaker_scores])
+            # normalized_scores = (listener_scores - np.min(listener_scores)) / (np.max(listener_scores) - np.min(listener_scores))
+            normalized_scores = softmax(speaker_scores)
+            for i in range(len(instr_speaker_scores)):
+                instr_id, _ = instr_speaker_scores[i]
+                normalized_score = normalized_scores[i]
+                instr2speaker_score[instr_id] = normalized_score
 
     sorted_path_ids = sorted(list(path2negative_instrs.keys()))
     count_groups = 0
@@ -220,6 +245,10 @@ if __name__ == '__main__':
     parser.add_argument('--input_voted_json_file', help='input voted file')
     parser.add_argument('--input_complete_json_file', help='input original file')
     parser.add_argument('--listener_metric', default=None, help='listener metric')
+    parser.add_argument('--normalize_listener', default=0, help='listener normalize')
+    parser.add_argument('--normalize_speaker', default=0, help='speaker normalize')
+    parser.add_argument('--listener_result_key', default="overall_voting_result", help='listener key')
+    parser.add_argument('--speaker_result_key', default="speaker_result", help='speaker key')
     args = parser.parse_args()
 
     if not args.listener_metric:
@@ -229,6 +258,7 @@ if __name__ == '__main__':
     speaker_weights = [0.1 * x for x in range(0, 11)]
     # speaker_weights = [0.0]
     speaker_models = ["clip", "finetuned_gpt"]
+    # speaker_models = ["vln_match"]
 
     for speaker_model in speaker_models:
         print("\n\n\nSpeaker model: ", speaker_model)
@@ -236,7 +266,12 @@ if __name__ == '__main__':
         metric2best_string = defaultdict(str)
         for speaker_weight in speaker_weights:
             for metric in metrics:
-                score, output_str = compute_listener_score(args.input_voted_json_file, args.input_complete_json_file, score_metric=metric, speaker_weight=speaker_weight, speaker_model=speaker_model)
+                score, output_str = compute_listener_score(args.input_voted_json_file, args.input_complete_json_file,
+                                                           score_metric=metric, normalize_listener=args.normalize_listener,
+                                                           speaker_weight=speaker_weight, speaker_model=speaker_model,
+                                                           normalize_speaker=args.normalize_speaker,
+                                                           listener_result_key=args.listener_result_key,
+                                                           speaker_result_key=args.speaker_result_key)
                 if score > metric2best_score[metric] and speaker_weight not in [0.0, 1.0]:
                     print("New best score for metric {}: {}".format(metric, score))
                     metric2best_score[metric] = score
