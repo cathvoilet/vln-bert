@@ -141,16 +141,17 @@ def eval_epoch(model, data_loader, dataset, args):
 
     result_json = {}
     dataset = dataset.get_dataset()
+    result_key = "result"
     for item in dataset:
         item.pop("instruction_tokens", None)
         item.pop("instruction_token_masks", None)
         item.pop("instruction_segment_ids", None)
         instr_id = item["instr_id"]
         score = instrid2score[instr_id][0]
-        if "result" in item:
-            item["result"]["vln_match"] = score
+        if result_key in item:
+            item[result_key]["vln_match"] = score
         else:
-            item["result"] = {"vln_match": score}
+            item[result_key] = {"vln_match": score}
         result_json[instr_id] = item
 
     return result_json
