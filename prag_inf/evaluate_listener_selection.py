@@ -10,11 +10,16 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 
 def compute_listener_score(input_voted_json_file, input_complete_json_file, score_metric="ndtw", speaker_weight=0.0,
                            speaker_model=None, normalize_listener=0, normalize_speaker=0,
-                           listener_result_key="overall_voting_result", speaker_result_key="speaker_result"):
+                           listener_result_key="overall_voting_result", speaker_result_key="speaker_result",
+                           matcher_weight=0.0, matcher_model="vln_match",
+                           normalize_matcher=0,
+                           matcher_result_key="result"):
     print("\n\nRank instructions by: ", score_metric)
     print("Listener weight: ", round(1.0-speaker_weight, 1))
     print("Speaker weight: ", round(speaker_weight, 1))
     print("Speaker score model: ", speaker_model)
+    print("Matcher weight: ", round(matcher_weight, 1))
+    print("Matcher model: ", matcher_model)
 
     path2voted_instrs = defaultdict(list)
     with open(input_voted_json_file) as f:
@@ -42,6 +47,8 @@ def compute_listener_score(input_voted_json_file, input_complete_json_file, scor
     instr2speaker_score = {}
     instr2speaker_model = {}
     path2speaker_scores = defaultdict(list)
+    instr2matcher_score = {}
+    path2matcher_scores = defaultdict(list)
     with open(input_complete_json_file) as f:
         tmp_data = json.load(f)
         for instr_id, item in tmp_data.items():
@@ -57,6 +64,10 @@ def compute_listener_score(input_voted_json_file, input_complete_json_file, scor
             if speaker_weight:
                 instr2speaker_score[instr_id] = item[speaker_result_key][speaker_model]
                 path2speaker_scores[path_id].append((instr_id, item[speaker_result_key][speaker_model]))
+
+            if matcher_weight:
+                instr2matcher_score[instr_id] = item[matcher_result_key][matcher_model]
+                path2matcher_scores[path_id].append((instr_id, item[matcher_result_key][matcher_model]))
 
             if item['model'] == "speaker_ref_agent1_eval":
                 instr2speaker_model[instr_id] = "ref"
@@ -75,13 +86,24 @@ def compute_listener_score(input_voted_json_file, input_complete_json_file, scor
                 normalized_score = normalized_scores[i]
                 instr2speaker_score[instr_id] = normalized_score
 
+    if normalize_matcher:
+        for path_id, instr_matcher_scores in path2matcher_scores.items():
+            matcher_scores = np.array([x[1] for x in instr_matcher_scores])
+            # normalized_scores = (listener_scores - np.min(listener_scores)) / (np.max(listener_scores) - np.min(listener_scores))
+            normalized_scores = softmax(matcher_scores)
+            for i in range(len(instr_matcher_scores)):
+                instr_id, _ = instr_matcher_scores[i]
+                normalized_score = normalized_scores[i]
+                instr2matcher_score[instr_id] = normalized_score
+
     sorted_path_ids = sorted(list(path2negative_instrs.keys()))
     count_groups = 0
-    n_iterations = 100  # 100
+    n_iterations = 20  # 100
     map_values = []
     scores_variance = []
     count_top_instruction_model = defaultdict(int)
     count_intruction_model_labels = defaultdict(int)
+    scale = 1e-2
 
     for j in range(n_iterations):
         count_paths = 0
@@ -105,6 +127,9 @@ def compute_listener_score(input_voted_json_file, input_complete_json_file, scor
                     if speaker_weight:
                         speaker_score = instr2speaker_score[instr_id]
                         score = pow(score, 1.0-speaker_weight) * pow(speaker_score, speaker_weight)
+                    if matcher_weight:
+                        matcher_score = instr2matcher_score[instr_id]
+                        score = pow(score, 1.0 - matcher_weight) * pow(matcher_score * scale, matcher_weight)
                     if instr_id == positive_instr:
                         instr_labels.append((instr_id, 1))
                         instr_preds.append((instr_id, score))
@@ -181,8 +206,10 @@ if __name__ == '__main__':
     parser.add_argument('--listener_metric', default=None, help='listener metric')
     parser.add_argument('--normalize_listener', default=0, help='listener normalize')
     parser.add_argument('--normalize_speaker', default=0, help='speaker normalize')
+    parser.add_argument('--normalize_matcher', default=0, help='matcher normalize')
     parser.add_argument('--listener_result_key', default="overall_voting_result", help='listener key')
     parser.add_argument('--speaker_result_key', default="speaker_result", help='speaker key')
+    parser.add_argument('--matcher_result_key', default=None, help='matching key')
     args = parser.parse_args()
 
     if not args.listener_metric:
@@ -194,25 +221,55 @@ if __name__ == '__main__':
     speaker_models = ["clip", "finetuned_gpt"]
     # speaker_models = ["vln_match"]
 
-    for speaker_model in speaker_models:
-        print("\n\n\nSpeaker model: ", speaker_model)
-        metric2best_score = defaultdict(float)
-        metric2best_string = defaultdict(str)
-        for speaker_weight in speaker_weights:
-            for metric in metrics:
-                score, output_str = compute_listener_score(args.input_voted_json_file, args.input_complete_json_file,
-                                                           score_metric=metric,
-                                                           normalize_listener=args.normalize_listener,
-                                                           speaker_weight=speaker_weight, speaker_model=speaker_model,
-                                                           normalize_speaker=args.normalize_speaker,
-                                                           listener_result_key=args.listener_result_key,
-                                                           speaker_result_key=args.speaker_result_key)
-                if score > metric2best_score[metric] and speaker_weight not in [0.0, 1.0]:
-                    print("New best score for metric {}: {}".format(metric, score))
-                    metric2best_score[metric] = score
-                    metric2best_string[metric] = output_str + " (lda={})".format(round(1.0-speaker_weight, 1))
+    if args.matcher_result_key:
+        matcher_weights = [0.1 * x for x in range(0, 11)]
+        matcher_model = "vln_match"
+        for speaker_model in speaker_models:
+            print("\n\n\nSpeaker model: ", speaker_model)
+            metric2best_score = defaultdict(float)
+            metric2best_string = defaultdict(str)
+            for speaker_weight in speaker_weights:
+                for matcher_weight in matcher_weights:
+                    for metric in metrics:
+                        score, output_str = compute_listener_score(args.input_voted_json_file, args.input_complete_json_file,
+                                                                   score_metric=metric,
+                                                                   normalize_listener=args.normalize_listener,
+                                                                   listener_result_key=args.listener_result_key,
+                                                                   speaker_weight=speaker_weight, speaker_model=speaker_model,
+                                                                   normalize_speaker=args.normalize_speaker,
+                                                                   speaker_result_key=args.speaker_result_key,
+                                                                   matcher_weight=matcher_weight, matcher_model=matcher_model,
+                                                                   normalize_matcher=args.normalize_matcher,
+                                                                   matcher_result_key=args.matcher_result_key)
+                        if score > metric2best_score[metric] and speaker_weight not in [0.0, 1.0]:
+                            print("New best score for metric {}: {}".format(metric, score))
+                            metric2best_score[metric] = score
+                            metric2best_string[metric] = output_str + " (lda={}, beta={})".format(round(1.0-speaker_weight, 1), round(matcher_weight, 1))
 
-        for metric in metrics:
-            print("\nSpeaker model {} final best score for metric {}: ".format(speaker_model, metric))
-            print(metric2best_string[metric])
+            for metric in metrics:
+                print("\nSpeaker model {} final best score for metric {}: ".format(speaker_model, metric))
+                print(metric2best_string[metric])
+
+    else:
+        for speaker_model in speaker_models:
+            print("\n\n\nSpeaker model: ", speaker_model)
+            metric2best_score = defaultdict(float)
+            metric2best_string = defaultdict(str)
+            for speaker_weight in speaker_weights:
+                for metric in metrics:
+                    score, output_str = compute_listener_score(args.input_voted_json_file, args.input_complete_json_file,
+                                                               score_metric=metric,
+                                                               normalize_listener=args.normalize_listener,
+                                                               speaker_weight=speaker_weight, speaker_model=speaker_model,
+                                                               normalize_speaker=args.normalize_speaker,
+                                                               listener_result_key=args.listener_result_key,
+                                                               speaker_result_key=args.speaker_result_key)
+                    if score > metric2best_score[metric] and speaker_weight not in [0.0, 1.0]:
+                        print("New best score for metric {}: {}".format(metric, score))
+                        metric2best_score[metric] = score
+                        metric2best_string[metric] = output_str + " (lda={})".format(round(1.0-speaker_weight, 1))
+
+            for metric in metrics:
+                print("\nSpeaker model {} final best score for metric {}: ".format(speaker_model, metric))
+                print(metric2best_string[metric])
 
