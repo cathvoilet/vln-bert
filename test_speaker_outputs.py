@@ -39,6 +39,7 @@ def main():
         required=True,
         help="Dataset file for evaluation",
     )
+    parser.add_argument('--path_sampling', default=0, type=int, help='listener agent path sampling size, 0 for not using path sampling')
     args = parser.parse_args()
 
     # force arguments
@@ -62,6 +63,7 @@ def main():
     )
     dataset = SpeakerDataset(
         file_path=args.speaker_output_file,
+        path_sampling=args.path_sampling,
         tokenizer=tokenizer,
         pano_features_reader=features_reader,
         max_instruction_length=args.max_instruction_length,

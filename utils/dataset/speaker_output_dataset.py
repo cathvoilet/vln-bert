@@ -13,6 +13,7 @@ from utils.dataset.common import (
     load_distances,
     load_json_data,
     load_speaker_json_data,
+    load_speaker_path_sampling_json_data,
     load_nav_graphs,
     randomize_regions,
     randomize_tokens,
@@ -28,6 +29,7 @@ class SpeakerDataset(Dataset):
     def __init__(
         self,
         file_path: str,
+        path_sampling: int,
         tokenizer: BertTokenizer,
         pano_features_reader: PanoFeaturesReader,
         max_instruction_length: int,
@@ -42,7 +44,10 @@ class SpeakerDataset(Dataset):
         **kwargs,
     ):
         # load and tokenize data (with caching)
-        self._vln_data = load_speaker_json_data(file_path)
+        if path_sampling:
+            self._vln_data = load_speaker_path_sampling_json_data(file_path, sample_size=path_sampling)
+        else:
+            self._vln_data = load_speaker_json_data(file_path)
         tokenize(self._vln_data, tokenizer, max_instruction_length, key="generated_instr")
         # save_json_data(self._vln_data, tokenized_path)
         self._tokenizer = tokenizer
@@ -95,6 +100,7 @@ class SpeakerDataset(Dataset):
         self._training = training
         self._masked_vision = masked_vision
         self._masked_language = masked_language
+        self._path_sampling = path_sampling
 
     def __len__(self):
         return len(self._vln_data)
@@ -113,7 +119,10 @@ class SpeakerDataset(Dataset):
         # get vln info
         scan_id = self._vln_data[vln_index]["scan"]
         heading = self._vln_data[vln_index]["heading"]
-        gt_path = self._vln_data[vln_index]["path"]
+        if self._path_sampling:
+            gt_path = self._vln_data[vln_index]["pred_path"]
+        else:
+            gt_path = self._vln_data[vln_index]["path"]
 
         # get the instruction data
         instr_tokens = self._vln_data[vln_index]["instruction_tokens"][

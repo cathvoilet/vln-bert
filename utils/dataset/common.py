@@ -1,5 +1,6 @@
 # pylint: disable=no-member, not-callable
 import json
+import copy
 
 import networkx as nx
 import numpy as np
@@ -18,6 +19,25 @@ def load_speaker_json_data(path):
         tmp_data = json.load(fid)
         for instr_id, item in tmp_data.items():
             data.append(item)
+
+    return data
+
+
+def load_speaker_path_sampling_json_data(path, sample_size=10):
+    data = []
+    path_sample_prefix = "pred_path_sample_"
+    result_sample_prefix = "result_sample_"
+
+    with open(path, "r") as fid:
+        tmp_data = json.load(fid)
+        for instr_id, item in tmp_data.items():
+            base_item = {x: item[x] for x in item if (not x.startswith(path_sample_prefix) and not x.startswith(result_sample_prefix))}
+            for i in range(sample_size):
+                new_item = copy.deepcopy(base_item)
+                new_item["instr_id"] = new_item["instr_id"] + "_sample_" + str(i)
+                new_item["pred_path"] = item[path_sample_prefix + str(i)]
+                new_item["result"] = item[result_sample_prefix + str(i)]
+                data.append(new_item)
 
     return data
 
